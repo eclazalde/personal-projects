@@ -3,6 +3,8 @@ import socket
 import sys
 import time
 import requests
+import errno
+import traceback
 
 class Poller:
     """ Polling server """
@@ -11,8 +13,10 @@ class Poller:
         self.port = port
         self.open_socket()
         self.clients = {}
-        self.size = 1024
+        self.size = 10000
+        
         self.methods = ['HEAD', 'POST', 'PUT', 'DELETE', 'TRACE', 'CONNECT']
+        self.client_data = {}
         self.media = {}
         self.hosts = {}
         self.timeout = 0
@@ -24,6 +28,9 @@ class Poller:
                 self.hosts[e[1]] = e[2].rstrip()
             if e[0] == 'media':
                 self.media[e[1]] = e[2]
+            if e[0] == 'parameter':
+                self.timeout = e[2]
+        print 'Mega-Awesome server running...'
 
     def open_socket(self):
         """ Setup the socket for incoming clients """
@@ -32,6 +39,7 @@ class Poller:
             self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,1)
             self.server.bind((self.host,self.port))
             self.server.listen(5)
+            self.server.setblocking(0)
         except socket.error, (value,message):
             if self.server:
                 self.server.close()
@@ -48,6 +56,7 @@ class Poller:
             try:
                 fds = self.poller.poll(timeout=1)
             except:
+                print traceback.format_exc()
                 return
             for (fd,event) in fds:
                 # handle errors
@@ -72,18 +81,49 @@ class Poller:
             # close the socket
             self.clients[fd].close()
             del self.clients[fd]
+            del self.client_data[fd]
 
     def handleServer(self):
-        (client,address) = self.server.accept()
-        self.clients[client.fileno()] = client
-        self.poller.register(client.fileno(),self.pollmask)
+        # accept as many clients as possible
+        while True:
+            try:
+                (client,address) = self.server.accept()
+            except socket.error, (value, message):
+                # if socket clock because no clients are available,
+                # then return
+                if value == errno.EAGAIN or errno.EWOULDBLOCK:
+                    return
+                print traceback.format_exc()
+                sys.exit()
+            # set client socket to be non blocking
+            client.setblocking(0)
+            self.clients[client.fileno()] = client
+            self.poller.register(client.fileno(), self.pollmask)
 
     # Server stuff
     def handleClient(self,fd):
+        try:
+            data = self.clients[fd].recv(self.size)
+        except socket.error, (value, message):
+            # if no data is available, move on to another client
+            if value == errno.EAGAIN or errno.EWOULDBLOCK:
+                return
+            print traceback.format_exc()
+            sys.exit()
+        
+        if fd not in self.client_data:
+            self.client_data[fd] = ''
+        if len(data) == 0:
+            #self.poller.unregister(fd)
+            #self.clients[fd].close()
+            #del self.client_data[fd]
+            #del self.clients[fd]
+            return
+        self.client_data[fd] += data
+            
         response = ''
-        data = self.clients[fd].recv(self.size)
-        if data:
-            request = data
+        if len(self.client_data[fd]) > 0:
+            request = self.client_data[fd] #data
             request = request.split('\r\n')
             method = request[0].split(' ')
             host = requests.get_host(request[1])
@@ -94,10 +134,29 @@ class Poller:
             elif method[0] in self.methods:
                 response = requests.not_implemented()
             else:
-                response = request.serv_error()
-            
-            self.clients[fd].send(response)
+                return
+            total_sent = 0
+            while total_sent < len(response):
+                try:   
+                    sent = self.clients[fd].send(response[total_sent:])
+                except socket.error, (value, message):
+                    if value == errno.EAGAIN or errno.EWOULDBLOCK:
+                        continue
+                    else:
+                        c_close(fd)
+                        #self.poller.unregister(fd)
+                        #self.clients[fd].close()
+                        #del self.client_data[fd]
+                        #del self.clients[fd]
+                        return
+                total_sent += sent
+            del self.client_data[fd]
         else:
-            self.poller.unregister(fd)
-            self.clients[fd].close()
-            del self.clients[fd]
+            c_close(fd)
+    
+    def c_close(self, fd):
+        print 'close'
+        self.poller.unregister(fd)
+        self.clients[fd].close()
+        del self.client_data[fd]
+        del self.clients[fd]
