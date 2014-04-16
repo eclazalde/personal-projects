@@ -75,7 +75,6 @@ class Poller:
                     continue
                 # handle client socket
                 result = self.handleClient(fd)
-                self.fdtime[fd] = time.time()
 
     def handleError(self,fd):
         self.poller.unregister(fd)
@@ -95,6 +94,7 @@ class Poller:
         while True:
             try:
                 (client,address) = self.server.accept()
+                self.fdtime[client.fileno()] = time.time()
             except socket.error, (value, message):
                 # if socket clock because no clients are available,
                 # then return
@@ -121,7 +121,7 @@ class Poller:
         if fd not in self.client_data:
             self.client_data[fd] = ''
         if len(data) == 0:
-            self.c_close(fd)
+            self.c_close(fd, 'empty string recv')
             return
         self.client_data[fd] += data
             
@@ -147,26 +147,30 @@ class Poller:
                     if value == errno.EAGAIN or errno.EWOULDBLOCK:
                         continue
                     else:
-                        self.c_close(fd)
+                        self.c_close(fd, 'send')
                         return
                 total_sent += sent
             del self.client_data[fd]
+            self.fdtime[fd] = time.time()
         else:
-            self.c_close(fd)
+            self.c_close(fd, 'else')
             
     def cleanup(self, t):
         #print 'cleaning...'
         trash = []
         for fd in self.fdtime:
-            if (self.fdtime[fd] - t) > float(self.timeout):
+            if (t - self.fdtime[fd]) > float(self.timeout):
                 trash.append(fd)
-                self.c_close(fd)
+                self.c_close(fd, 'cleanup')
         for item in trash:
             del self.fdtime[item]
         #print ('cleaned %s') % len(trash)
     
-    def c_close(self, fd):
+    def c_close(self, fd, where):
+        #print ('closed %s from %s') % (fd, where)
         self.poller.unregister(fd)
-        self.clients[fd].close()
-        del self.client_data[fd]
-        del self.clients[fd]
+        if fd in self.client_data:
+            del self.client_data[fd]   
+        if fd in self.clients:
+            self.clients[fd].close()     
+            del self.clients[fd]
