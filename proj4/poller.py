@@ -16,6 +16,8 @@ class Poller:
         self.size = 10000
         
         self.methods = ['HEAD', 'POST', 'PUT', 'DELETE', 'TRACE', 'CONNECT']
+        self.fdtime = {}
+        self.t_old = time.time()
         self.client_data = {}
         self.media = {}
         self.hosts = {}
@@ -55,6 +57,10 @@ class Poller:
             # poll sockets
             try:
                 fds = self.poller.poll(timeout=1)
+                t_current = time.time()
+                if (t_current - self.t_old) > float(self.timeout):
+                    self.cleanup(t_current)
+                    self.t_old = time.time()
             except:
                 print traceback.format_exc()
                 return
@@ -69,6 +75,7 @@ class Poller:
                     continue
                 # handle client socket
                 result = self.handleClient(fd)
+                self.fdtime[fd] = time.time()
 
     def handleError(self,fd):
         self.poller.unregister(fd)
@@ -114,16 +121,13 @@ class Poller:
         if fd not in self.client_data:
             self.client_data[fd] = ''
         if len(data) == 0:
-            #self.poller.unregister(fd)
-            #self.clients[fd].close()
-            #del self.client_data[fd]
-            #del self.clients[fd]
+            self.c_close(fd)
             return
         self.client_data[fd] += data
             
         response = ''
         if len(self.client_data[fd]) > 0:
-            request = self.client_data[fd] #data
+            request = self.client_data[fd]
             request = request.split('\r\n')
             method = request[0].split(' ')
             host = requests.get_host(request[1])
@@ -143,19 +147,25 @@ class Poller:
                     if value == errno.EAGAIN or errno.EWOULDBLOCK:
                         continue
                     else:
-                        c_close(fd)
-                        #self.poller.unregister(fd)
-                        #self.clients[fd].close()
-                        #del self.client_data[fd]
-                        #del self.clients[fd]
+                        self.c_close(fd)
                         return
                 total_sent += sent
             del self.client_data[fd]
         else:
-            c_close(fd)
+            self.c_close(fd)
+            
+    def cleanup(self, t):
+        #print 'cleaning...'
+        trash = []
+        for fd in self.fdtime:
+            if (self.fdtime[fd] - t) > float(self.timeout):
+                trash.append(fd)
+                self.c_close(fd)
+        for item in trash:
+            del self.fdtime[item]
+        #print ('cleaned %s') % len(trash)
     
     def c_close(self, fd):
-        print 'close'
         self.poller.unregister(fd)
         self.clients[fd].close()
         del self.client_data[fd]
