@@ -85,9 +85,11 @@ class Poller:
             self.poller.register(self.server,self.pollmask)
         else:
             # close the socket
-            self.clients[fd].close()
-            del self.clients[fd]
-            del self.client_data[fd]
+            if fd in self.client_data:
+                del self.client_data[fd]   
+            if fd in self.clients:
+                self.clients[fd].close()     
+                del self.clients[fd]
 
     def handleServer(self):
         # accept as many clients as possible

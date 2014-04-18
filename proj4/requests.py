@@ -19,7 +19,7 @@ def get_request(r_file, host, media):
         try:
             f = open(host + r_file, 'r')
             m_file = f.read()
-            #f.close()
+            f.close()
             c_type = r_file.split('.')[1]
             response = 'HTTP/1.1 200 OK\r\n'
             response += 'Date: %s\r\n' % (date_time)
